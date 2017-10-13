@@ -17,6 +17,10 @@
 #include <linux/of_irq.h>
 
 #include <linux/of_device.h>
+//#include <linux/devfs_fs_kernel.h>
+#include <linux/kernel.h>
+
+#include <linux/cdev.h>
 
 #include <asm/io.h>
 #include <asm/page.h>
@@ -26,19 +30,29 @@ typedef uint32_t	fsim_request;
 typedef uint32_t	fsim_response;
 
 #define FSIM_MANAGER_REQUEST_OFFSET		0
-#define FSIM_MANAGER_RESPONSE_OFFSET	1
+#define FSIM_MANAGER_RESPONSE_OFFSET		4
 
 static int major=0; /* major number we get from the kernel */
 
+static struct class *fsim_manager_class;
+
 struct fsim_manager_device {
 	struct device *dev;
-	struct regmap *regmap;
 	void __iomem *iomem;
-	spinlock_t lock;
+	struct cdev c_dev;
+	spinlock_t lock;	
 };
 
 static int fsim_open(struct inode *inode, struct file *filp) {
-	/* We have to do something here! */
+	struct fsim_manager_device* dev;
+	struct cdev* cdev = inode->i_cdev;
+	dev = container_of(cdev, struct fsim_manager_device, c_dev);
+
+	if (!dev) {
+		printk(KERN_INFO "fsim-manager cannot retrieve device\n");
+	}
+	filp->private_data = dev;
+	
 	return 0;
 }
 
@@ -52,9 +66,12 @@ static ssize_t fsim_read(struct file *file, char __user *buf, size_t count, loff
 	u32 data;
 	u32 __user *tmp = (u32 __user *) buf;
 
+	
 	if (count != 4)
+	{
 		return -EINVAL;
-
+	}
+	
 	spin_lock(&dev->lock);
 
 	if(!dev->dev) {
@@ -63,7 +80,6 @@ static ssize_t fsim_read(struct file *file, char __user *buf, size_t count, loff
 	}
 
 	data = ioread32(dev->iomem + FSIM_MANAGER_RESPONSE_OFFSET);
-	
 
 	if (copy_to_user(tmp, &data, 4)) {
 		ret = -EFAULT;
@@ -81,9 +97,12 @@ static ssize_t fsim_write(struct file* file, const char __user *buf, size_t coun
 	const u32 __user *tmp = (const u32 __user *)buf;
 	u32 data;
 	int ret;
-	if (count != 4)
+	
+	
+	if (count != 4) {
 		return -EINVAL;
-
+	}
+	
 	spin_lock(&dev->lock);
 
 	if(!dev->dev) {
@@ -97,20 +116,23 @@ static ssize_t fsim_write(struct file* file, const char __user *buf, size_t coun
 	}
 	
 	iowrite32(data, dev->iomem + FSIM_MANAGER_REQUEST_OFFSET);
+	
 	ret = 4;
 out:
 	spin_unlock(&dev->lock);
 	return ret;
 }
 
-struct file_operations fsim_fops = {
-	//lseek:  fsim_llseek,
-	read:  fsim_read,
-	write:  fsim_write,
-	//ioctl:  fsim_ioctl,
-	open:  fsim_open,
-	release: fsim_release,
+static const struct file_operations fsim_fops = {
+	.owner		= THIS_MODULE,
+	.llseek		= noop_llseek,
+	.read		= fsim_read,
+	.write 		= fsim_write,
+	.open 		= fsim_open,
+	/* no implementation below */
+	.release 	= fsim_release,
 };
+
 
 static int fsim_manager_parse_dt(struct fsim_manager_device *fsim) {	
 	struct device *dev = fsim->dev;
@@ -133,14 +155,19 @@ static int fsim_manager_parse_dt(struct fsim_manager_device *fsim) {
 	return 0;
 }
 
-int fsim_manager_probe(struct platform_device *pdev) {
+static int fsim_manager_probe(struct platform_device *pdev) {
 	/* implement me */
 	struct device *dev = &pdev->dev;
 	struct fsim_manager_device *fsim;
-	int err;
+	int err, ret;
+	dev_t devno;
 
-	if(!dev->of_node)
+	fsim_manager_class = class_create(THIS_MODULE, "fsim");
+
+	if(!dev->of_node) {
+		printk(KERN_INFO "fsim-manager: error");
 		return -ENODEV;
+	}
 
 	fsim = devm_kzalloc(dev, sizeof(*fsim), GFP_KERNEL);
 	fsim->dev = dev;
@@ -150,20 +177,36 @@ int fsim_manager_probe(struct platform_device *pdev) {
 
 	err = fsim_manager_parse_dt(fsim);
 	if (err) {
-		dev_err(dev, "Parsing DeviceTree failed\n");
+		dev_err(dev, "fsim-manager: Parsing DeviceTree failed\n");
 		return err;
 	}
 	
-	major = register_chrdev(0, FSIM_DEVICE_NAME, &fsim_fops);
-	if (major < 0) {
-		printk(KERN_WARNING "firesim-manager: could not obtain major number\n");
-		return major;
+	//major = register_chrdev(0, FSIM_DEVICE_NAME, &fsim_fops);
+	
+	ret = alloc_chrdev_region(&devno, 0, 1, FSIM_DEVICE_NAME);
+	major = MAJOR(devno);
+
+	if ( ret < 0 ) {
+		printk(KERN_WARNING "fsim-manager: could not get major number\n");
+	}
+
+	cdev_init(&fsim->c_dev, &fsim_fops);
+	fsim->c_dev.owner = THIS_MODULE;
+	fsim->c_dev.ops = &fsim_fops;
+	err = cdev_add (&fsim->c_dev, devno, 1);
+	if (err)
+		printk(KERN_NOTICE "Error %d adding fsim-manager", err);
+
+	dev = device_create(fsim_manager_class, NULL, devno, fsim, FSIM_DEVICE_NAME);
+	if(IS_ERR(dev)){
+		printk(KERN_ERR "fsim-manager device_create faild\n");
+		return -ENODEV;
 	}
 
 	return 0;
 }
 
-int fsim_manager_remove(struct platform_device *pdev) {
+static int fsim_manager_remove(struct platform_device *pdev) {
 	/* implement me */
 	//struct device *dev = &pdev->dev;
 	//struct fsim_manager_device *fsim = dev_get_drvdata(dev);
@@ -174,7 +217,7 @@ int fsim_manager_remove(struct platform_device *pdev) {
 
 
 static struct of_device_id fsim_manager_of_match[] = {
-	{ .compatible = "ucbbar,wallclock" },
+	{ .compatible = "ucbbar,fsim-manager" },
 	{}
 };
 
