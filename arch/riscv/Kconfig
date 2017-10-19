@@ -157,6 +157,10 @@ config ICENET
         tristate "IceNet Ethernet NIC"
         default y
 
+config FSIM_DEVICE
+				tristate "FireSim API Device"
+				default y
+
 config ISA_C
 	bool "Emit compressed instructions when building Linux"
 	default n
