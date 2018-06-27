@@ -93,6 +93,9 @@ if ICENET
 	config ICENET_RING_SIZE
 		int "IceNet DMA ring size"
 		default 64
+        config ICENET_RMEM_CLIENT
+                bool "Remote Memory Client"
+                default y
 endif # ICENET
 
 config JME
