@@ -17,6 +17,7 @@
 #include <linux/initrd.h>
 #include <linux/memblock.h>
 #include <linux/swap.h>
+#include <linux/sizes.h>
 
 #include <asm/tlbflush.h>
 #include <asm/sections.h>
@@ -29,15 +30,10 @@
 
 static void __init zone_sizes_init(void)
 {
-	unsigned long max_zone_pfns[MAX_NR_ZONES];
+	unsigned long max_zone_pfns[MAX_NR_ZONES] = { 0, };
 
-	memset(max_zone_pfns, 0, sizeof(max_zone_pfns));
-	max_zone_pfns[ZONE_DMA] = PFN_DOWN(MAX_DMA_PHYSICAL);
+	max_zone_pfns[ZONE_DMA32] = PFN_DOWN(min(4UL * SZ_1G, max_low_pfn));
 	max_zone_pfns[ZONE_NORMAL] = max_low_pfn;
-
-	// With <= 2GiB it is possible to have only ZONE_DMA
-	if (max_zone_pfns[ZONE_DMA] > max_zone_pfns[ZONE_NORMAL])
-		max_zone_pfns[ZONE_DMA] = max_zone_pfns[ZONE_NORMAL];
 
 	free_area_init_nodes(max_zone_pfns);
 }
@@ -49,8 +45,6 @@ void setup_zero_page(void)
 
 void __init paging_init(void)
 {
-	init_mm.pgd = (pgd_t *)pfn_to_virt(csr_read(sptbr));
-
 	setup_zero_page();
 	local_flush_tlb_all();
 	zone_sizes_init();

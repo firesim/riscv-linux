@@ -357,6 +357,8 @@ config RISCV_INTC
 	   Without a local interrupt controller the system will be unable to
 	   handle any interrupts, including those passed via the PLIC.
 
+	   If you don't know what to do here, say Y.
+
 config RISCV_PLIC
 	bool "Platform-Level Interrupt Controller"
 	depends on RISCV

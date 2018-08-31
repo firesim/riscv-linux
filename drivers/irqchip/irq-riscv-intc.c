@@ -23,7 +23,6 @@
 #include <asm/ptrace.h>
 #include <asm/sbi.h>
 #include <asm/smp.h>
-#include <asm/handle_irq.h>
 
 #define PTR_BITS (8 * sizeof(uintptr_t))
 
@@ -57,7 +56,16 @@ void riscv_intc_irq(struct pt_regs *regs)
 {
 	struct pt_regs *old_regs = set_irq_regs(regs);
 	struct irq_domain *domain;
-	int cause = csr_read(scause);
+	unsigned long cause = csr_read(scause);
+
+	/*
+	 * The high order bit of the trap cause register is always set for
+	 * interrupts, which allows us to differentiate them from exceptions
+	 * quickly.  The INTERRUPT_CAUSE_* macros don't contain that bit, so we
+	 * need to mask it off here.
+	 */
+	WARN_ON((cause & (1UL << (PTR_BITS - 1))) == 0);
+	cause = cause & ~(1UL << (PTR_BITS - 1));
 
 	irq_enter();
 
@@ -201,14 +209,10 @@ static int __init riscv_intc_init(struct device_node *node, struct device_node *
 	if (!data->domain)
 		goto error_add_linear;
 
-	if (set_handle_irq(&riscv_intc_irq))
-		goto error_set_handle_irq;
+	set_handle_irq(&riscv_intc_irq);
 
-	pr_info("%s: %ul local interrupts mapped\n", data->name, PTR_BITS);
+	pr_info("%s: %lu local interrupts mapped\n", data->name, PTR_BITS);
 	return 0;
-
-error_set_handle_irq:
-	BUG();
 
 error_add_linear:
 	pr_warning("%s: unable to add IRQ domain\n",

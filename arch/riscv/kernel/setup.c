@@ -29,6 +29,7 @@
 #include <linux/of_fdt.h>
 #include <linux/of_platform.h>
 #include <linux/sched/task.h>
+#include <linux/swiotlb.h>
 
 #include <asm/setup.h>
 #include <asm/sections.h>
@@ -69,10 +70,6 @@ struct screen_info screen_info = {
 	.orig_video_points	= 8
 };
 #endif
-
-#ifdef CONFIG_CMDLINE_BOOL
-static char __initdata builtin_cmdline[COMMAND_LINE_SIZE] = CONFIG_CMDLINE;
-#endif /* CONFIG_CMDLINE_BOOL */
 
 unsigned long va_pa_offset;
 EXPORT_SYMBOL(va_pa_offset);
@@ -196,7 +193,7 @@ static void __init setup_bootmem(void)
 	BUG_ON(mem_size == 0);
 
 	set_max_mapnr(PFN_DOWN(mem_size));
-	max_low_pfn = pfn_base + PFN_DOWN(mem_size);
+	max_low_pfn = memblock_end_of_DRAM();
 
 #ifdef CONFIG_BLK_DEV_INITRD
 	setup_initrd();
@@ -208,12 +205,11 @@ static void __init setup_bootmem(void)
 	memblock_dump_all();
 
 	for_each_memblock(memory, reg) {
-		unsigned long start_pfn, end_pfn;
+		unsigned long start_pfn = memblock_region_memory_base_pfn(reg);
+		unsigned long end_pfn = memblock_region_memory_end_pfn(reg);
 
-		start_pfn = memblock_region_memory_base_pfn(reg);
-		end_pfn = memblock_region_memory_end_pfn(reg);
-		memblock_set_node(start_pfn << PAGE_SHIFT,
-		                  (end_pfn - start_pfn) << PAGE_SHIFT,
+		memblock_set_node(PFN_PHYS(start_pfn),
+		                  PFN_PHYS(end_pfn - start_pfn),
 		                  &memblock.memory, 0);
 	}
 }
@@ -226,18 +222,6 @@ void __init setup_arch(char **cmdline_p)
                register_console(early_console);
        }
 #endif
-#ifdef CONFIG_CMDLINE_BOOL
-#ifdef CONFIG_CMDLINE_OVERRIDE
-	strlcpy(boot_command_line, builtin_cmdline, COMMAND_LINE_SIZE);
-#else
-	if (builtin_cmdline[0] != '\0') {
-		/* Append bootloader command line to built-in */
-		strlcat(builtin_cmdline, " ", COMMAND_LINE_SIZE);
-		strlcat(builtin_cmdline, boot_command_line, COMMAND_LINE_SIZE);
-		strlcpy(boot_command_line, builtin_cmdline, COMMAND_LINE_SIZE);
-	}
-#endif /* CONFIG_CMDLINE_OVERRIDE */
-#endif /* CONFIG_CMDLINE_BOOL */
 	*cmdline_p = boot_command_line;
 
 	parse_early_param();
@@ -250,6 +234,8 @@ void __init setup_arch(char **cmdline_p)
 	setup_bootmem();
 	paging_init();
 	unflatten_device_tree();
+
+	swiotlb_init(1);
 
 #ifdef CONFIG_SMP
 	setup_smp();
