@@ -109,6 +109,8 @@ static inline void post_send(
 	addr -= NET_IP_ALIGN;
 	len += NET_IP_ALIGN;
 
+	memset(skb->head, 0, skb_headroom(skb));
+
 	packet = (partial << 63) | (len << 48) | (addr & 0xffffffffffffL);
 	iowrite64(packet, nic->iomem + ICENET_SEND_REQ);
 
