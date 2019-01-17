@@ -143,6 +143,9 @@ config DA8XX_DDRCTL
 	  Texas Instruments da8xx SoCs. It's used to tweak various memory
 	  controller configuration options.
 
+config DRAM_CACHE
+        bool "UCB-BAR remote memory DRAM cache driver"
+
 source "drivers/memory/samsung/Kconfig"
 source "drivers/memory/tegra/Kconfig"
 
