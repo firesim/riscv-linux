@@ -78,7 +78,7 @@ static void generic_blkdev_process_completions(struct generic_blkdev_port *port)
 
 	if (ncomplete > 0 && !port->qrunning) {
 		port->qrunning = 1;
-		blk_mq_run_hw_queues(port->queue, true);
+		blk_mq_start_stopped_hw_queues(port->queue, true);
 	}
 }
 
@@ -157,7 +157,7 @@ static blk_status_t generic_blkdev_rq_handler(struct blk_mq_hw_ctx *hctx,
 
 		if (ioread8(port->iomem + GENERIC_BLKDEV_NREQUEST) == 0) {
 			port->qrunning = 0;
-			blk_mq_stop_hw_queues(port->queue);
+			blk_mq_stop_hw_queue(hctx);
 			break;
 		}
 	} while (blk_update_request(req, err, blk_rq_cur_bytes(req)));
