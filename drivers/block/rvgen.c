@@ -6,6 +6,7 @@
 #include <linux/bio.h>
 #include <linux/fs.h>
 #include <linux/hdreg.h>
+#include <linux/blk-mq.h>
 
 #include <linux/interrupt.h>
 #include <linux/irq.h>
@@ -21,8 +22,7 @@
 
 #define GENERIC_BLKDEV_NAME "generic-blkdev"
 #define GENERIC_BLKDEV_MINORS 16
-#define SECTOR_SIZE 512
-#define SECTOR_SHIFT 9
+#define GENERIC_BLKDEV_SECTOR_SIZE 512
 
 #define GENERIC_BLKDEV_ADDR 0
 #define GENERIC_BLKDEV_OFFSET 8
@@ -41,6 +41,7 @@ struct generic_blkdev_port {
 	struct gendisk *gd;
 	struct request_queue *queue;
 	struct list_head *reqbuf;
+	struct blk_mq_tag_set tag_set;
 	spinlock_t lock;
 	int major;
 	int irq;
@@ -70,14 +71,14 @@ static void generic_blkdev_process_completions(struct generic_blkdev_port *port)
 		breq = list_entry(port->reqbuf[tag].prev,
 				struct generic_blkdev_request, list);
 		mb();
-		__blk_end_request_all(breq->req, 0);
+		__blk_mq_end_request(breq->req, BLK_STS_OK);
 		list_del(&breq->list);
 		kfree(breq);
 	}
 
 	if (ncomplete > 0 && !port->qrunning) {
 		port->qrunning = 1;
-		blk_start_queue_async(port->queue);
+		blk_mq_run_hw_queues(port->queue, true);
 	}
 }
 
@@ -125,13 +126,19 @@ static void generic_blkdev_queue_request(struct request *req, int write)
 	//	(write) ? "w" : "r", addr, offset, len, tag);
 }
 
-static void generic_blkdev_rq_handler(struct request_queue *rq)
+static blk_status_t generic_blkdev_rq_handler(struct blk_mq_hw_ctx *hctx,
+					const struct blk_mq_queue_data *bd)
 {
-	struct request *req;
+	struct request *req = bd->rq;
+	struct generic_blkdev_port *port = generic_blkdev_req_port(req);
+	blk_status_t err = BLK_STS_OK;
 
-	while ((req = blk_fetch_request(rq)) != NULL) {
-		struct generic_blkdev_port *port = generic_blkdev_req_port(req);
+	if (!spin_trylock_irq(&port->lock))
+		return BLK_STS_DEV_RESOURCE;
 
+	blk_mq_start_request(req);
+
+	do {
 		switch (req_op(req)) {
 		case REQ_OP_DISCARD:
 		case REQ_OP_FLUSH:
@@ -144,15 +151,21 @@ static void generic_blkdev_rq_handler(struct request_queue *rq)
 			break;
 		default:
 			printk(KERN_ERR "unhandleable generic_blkdev request\n");
-			__blk_end_request_all(req, -EIO);
+			err = BLK_STS_NOTSUPP;
+			break;
 		}
 
 		if (ioread8(port->iomem + GENERIC_BLKDEV_NREQUEST) == 0) {
 			port->qrunning = 0;
-			blk_stop_queue(port->queue);
+			blk_mq_stop_hw_queues(port->queue);
 			break;
 		}
-	}
+	} while (blk_update_request(req, err, blk_rq_cur_bytes(req)));
+
+	spin_unlock_irq(&port->lock);
+
+	blk_mq_end_request(req, err);
+	return BLK_STS_OK;
 }
 
 static int generic_blkdev_parse_dt(struct generic_blkdev_port *port)
@@ -186,6 +199,10 @@ static int generic_blkdev_parse_dt(struct generic_blkdev_port *port)
 	return 0;
 }
 
+static const struct blk_mq_ops generic_blkdev_mq_ops = {
+	.queue_rq = generic_blkdev_rq_handler,
+};
+
 static int generic_blkdev_setup(struct generic_blkdev_port *port)
 {
 	uint32_t nsectors = ioread32(port->iomem + GENERIC_BLKDEV_NSECTORS);
@@ -212,12 +229,13 @@ static int generic_blkdev_setup(struct generic_blkdev_port *port)
 		INIT_LIST_HEAD(&port->reqbuf[i]);
 
 	spin_lock_init(&port->lock);
-	port->queue = blk_init_queue(generic_blkdev_rq_handler, &port->lock);
+	port->queue = blk_mq_init_sq_queue(&port->tag_set,
+		&generic_blkdev_mq_ops, 2, BLK_MQ_F_SHOULD_MERGE);
 	if (!port->queue) {
 		dev_err(dev, "Could not initialize blk_queue\n");
 		goto exit_queue;
 	}
-	blk_queue_logical_block_size(port->queue, SECTOR_SIZE);
+	blk_queue_logical_block_size(port->queue, GENERIC_BLKDEV_SECTOR_SIZE);
 	blk_queue_max_segments(port->queue, 1);
 	blk_queue_max_hw_sectors(port->queue, max_req_len);
 
@@ -241,6 +259,7 @@ static int generic_blkdev_setup(struct generic_blkdev_port *port)
 
 exit_gendisk:
 	blk_cleanup_queue(port->queue);
+	blk_mq_free_tag_set(&port->tag_set);
 exit_queue:
 	return -ENOMEM;
 }
