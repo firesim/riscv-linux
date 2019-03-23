@@ -71,7 +71,7 @@ static void generic_blkdev_process_completions(struct generic_blkdev_port *port)
 		breq = list_entry(port->reqbuf[tag].prev,
 				struct generic_blkdev_request, list);
 		mb();
-		__blk_mq_end_request(breq->req, BLK_STS_OK);
+		blk_mq_end_request(breq->req, BLK_STS_OK);
 		list_del(&breq->list);
 		kfree(breq);
 	}
@@ -132,40 +132,36 @@ static blk_status_t generic_blkdev_rq_handler(struct blk_mq_hw_ctx *hctx,
 	struct request *req = bd->rq;
 	struct generic_blkdev_port *port = generic_blkdev_req_port(req);
 	blk_status_t err = BLK_STS_OK;
-
-	if (!spin_trylock_irq(&port->lock))
-		return BLK_STS_DEV_RESOURCE;
+	unsigned long flags;
 
 	blk_mq_start_request(req);
+	spin_lock_irqsave(&port->lock, flags);
 
-	do {
-		switch (req_op(req)) {
-		case REQ_OP_DISCARD:
-		case REQ_OP_FLUSH:
-			break;
-		case REQ_OP_READ:
-			generic_blkdev_queue_request(req, 0);
-			break;
-		case REQ_OP_WRITE:
-			generic_blkdev_queue_request(req, 1);
-			break;
-		default:
-			printk(KERN_ERR "unhandleable generic_blkdev request\n");
-			err = BLK_STS_NOTSUPP;
-			break;
-		}
+	if (ioread8(port->iomem + GENERIC_BLKDEV_NREQUEST) == 0) {
+		port->qrunning = 0;
+		blk_mq_stop_hw_queue(hctx);
+		err = BLK_STS_DEV_RESOURCE;
+		goto out;
+	}
 
-		if (ioread8(port->iomem + GENERIC_BLKDEV_NREQUEST) == 0) {
-			port->qrunning = 0;
-			blk_mq_stop_hw_queue(hctx);
-			break;
-		}
-	} while (blk_update_request(req, err, blk_rq_cur_bytes(req)));
+	switch (req_op(req)) {
+	case REQ_OP_DISCARD:
+	case REQ_OP_FLUSH:
+		break;
+	case REQ_OP_READ:
+		generic_blkdev_queue_request(req, 0);
+		break;
+	case REQ_OP_WRITE:
+		generic_blkdev_queue_request(req, 1);
+		break;
+	default:
+		dev_err(port->dev, "unhandleable generic_blkdev request\n");
+		err = BLK_STS_NOTSUPP;
+	}
 
-	spin_unlock_irq(&port->lock);
-
-	blk_mq_end_request(req, err);
-	return BLK_STS_OK;
+out:
+	spin_unlock_irqrestore(&port->lock, flags);
+	return err;
 }
 
 static int generic_blkdev_parse_dt(struct generic_blkdev_port *port)
@@ -231,7 +227,7 @@ static int generic_blkdev_setup(struct generic_blkdev_port *port)
 	spin_lock_init(&port->lock);
 	port->queue = blk_mq_init_sq_queue(&port->tag_set,
 		&generic_blkdev_mq_ops, 2, BLK_MQ_F_SHOULD_MERGE);
-	if (!port->queue) {
+	if (IS_ERR(port->queue)) {
 		dev_err(dev, "Could not initialize blk_queue\n");
 		goto exit_queue;
 	}
