@@ -71,7 +71,7 @@ static void generic_blkdev_process_completions(struct generic_blkdev_port *port)
 		breq = list_entry(port->reqbuf[tag].next,
 				struct generic_blkdev_request, list);
 		mb();
-		blk_mq_end_request(breq->req, BLK_STS_OK);
+		blk_mq_complete_request(breq->req);
 		list_del(&breq->list);
 		kfree(breq);
 	}
@@ -164,6 +164,11 @@ out:
 	return err;
 }
 
+static void generic_blkdev_complete_rq(struct request *req)
+{
+	blk_mq_end_request(req, BLK_STS_OK);
+}
+
 static int generic_blkdev_parse_dt(struct generic_blkdev_port *port)
 {
 	struct device *dev = port->dev;
@@ -197,6 +202,7 @@ static int generic_blkdev_parse_dt(struct generic_blkdev_port *port)
 
 static const struct blk_mq_ops generic_blkdev_mq_ops = {
 	.queue_rq = generic_blkdev_rq_handler,
+	.complete = generic_blkdev_complete_rq,
 };
 
 static int generic_blkdev_setup(struct generic_blkdev_port *port)
