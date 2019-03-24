@@ -68,7 +68,7 @@ static void generic_blkdev_process_completions(struct generic_blkdev_port *port)
 	for (i = 0; i < ncomplete; i++) {
 		tag = ioread8(port->iomem + GENERIC_BLKDEV_COMPLETE);
 		BUG_ON(list_empty(&port->reqbuf[tag]));
-		breq = list_entry(port->reqbuf[tag].prev,
+		breq = list_entry(port->reqbuf[tag].next,
 				struct generic_blkdev_request, list);
 		mb();
 		blk_mq_end_request(breq->req, BLK_STS_OK);
