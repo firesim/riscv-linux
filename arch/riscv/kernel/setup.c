@@ -43,10 +43,9 @@ void __init parse_dtb(phys_addr_t dtb_phys)
 {
 	void *dtb = __va(dtb_phys);
 
-	if (early_init_dt_scan(dtb))
-		return;
+	if (!early_init_dt_scan(dtb))
+    pr_err("No DTB passed to the kernel\n");
 
-	pr_err("No DTB passed to the kernel\n");
 #ifdef CONFIG_CMDLINE_FORCE
 	strlcpy(boot_command_line, CONFIG_CMDLINE, COMMAND_LINE_SIZE);
 	pr_info("Forcing kernel command line to: %s\n", boot_command_line);
