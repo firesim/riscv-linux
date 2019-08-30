@@ -64,6 +64,8 @@ void start_thread(struct pt_regs *regs, unsigned long pc,
 	unsigned long sp)
 {
 	regs->sstatus = SR_SPIE;
+  /* Enable rocc instructions */
+  regs->sstatus = SR_XS_INITIAL;
 	if (has_fpu)
 		regs->sstatus |= SR_FS_INITIAL;
 	regs->sepc = pc;
