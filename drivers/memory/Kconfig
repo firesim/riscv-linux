@@ -146,6 +146,9 @@ config DA8XX_DDRCTL
 config DRAM_CACHE
         bool "UCB-BAR remote memory DRAM cache driver"
 
+config SIFIVE_CACHE
+        bool "SiFive Inclusive Cache driver"
+
 source "drivers/memory/samsung/Kconfig"
 source "drivers/memory/tegra/Kconfig"
 

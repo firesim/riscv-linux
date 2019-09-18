@@ -31,8 +31,10 @@
 #define PAGES_PER_EXTENT (1L << (EXTENT_SHIFT - PAGE_SHIFT))
 
 struct dram_cache {
+	struct cdev ctrl_cdev;
 	struct cdev exttab_cdev;
 	struct cdev memory_cdev;
+	struct resource ctrl_regs;
 	struct resource exttab_regs;
 	struct resource memory_regs;
 };
@@ -95,6 +97,17 @@ static int dram_cache_memory_open(struct inode *inode, struct file *file)
 	return 0;
 }
 
+static int dram_cache_ctrl_open(struct inode *inode, struct file *file)
+{
+	struct cdev *cdev = inode->i_cdev;
+	struct dram_cache *cache = container_of(
+			cdev, struct dram_cache, ctrl_cdev);
+
+	file->private_data = cache;
+
+	return 0;
+}
+
 static int dram_cache_exttab_mmap(
 		struct file *file, struct vm_area_struct *vma)
 {
@@ -132,6 +145,26 @@ static int dram_cache_memory_mmap(
 			vma, vma->vm_start, pfn, size, vma->vm_page_prot);
 }
 
+static int dram_cache_ctrl_mmap(
+		struct file *file, struct vm_area_struct *vma)
+{
+	struct dram_cache *cache = file->private_data;
+	unsigned long size = vma->vm_end - vma->vm_start;
+	unsigned long max_size = cache->ctrl_regs.end - cache->ctrl_regs.start + 1;
+	unsigned long pfn;
+
+	if (max_size < PAGE_SIZE)
+		max_size = PAGE_SIZE;
+
+	if ((vma->vm_pgoff << PAGE_SHIFT) + size > max_size)
+		return -EINVAL;
+
+	pfn = (cache->ctrl_regs.start >> PAGE_SHIFT) + vma->vm_pgoff;
+
+	return io_remap_pfn_range(
+			vma, vma->vm_start, pfn, size, vma->vm_page_prot);
+}
+
 static struct file_operations dram_cache_exttab_fops  = {
 	.owner = THIS_MODULE,
 	.open  = dram_cache_exttab_open,
@@ -142,6 +175,12 @@ static struct file_operations dram_cache_memory_fops = {
 	.owner = THIS_MODULE,
 	.open  = dram_cache_memory_open,
 	.mmap  = dram_cache_memory_mmap
+};
+
+static struct file_operations dram_cache_ctrl_fops = {
+	.owner = THIS_MODULE,
+	.open  = dram_cache_ctrl_open,
+	.mmap  = dram_cache_ctrl_mmap
 };
 
 static int dram_cache_find_addr(
@@ -188,6 +227,13 @@ static int dram_cache_probe(struct platform_device *pdev)
 		return -ENODEV;
 
 	cache = devm_kmalloc(dev, sizeof(struct dram_cache), GFP_KERNEL);
+	if (cache == NULL)
+		return -ENOMEM;
+
+	result = dram_cache_find_addr(
+			dev, "ucbbar,dram-cache-ctrl", &cache->ctrl_regs);
+	if (result < 0)
+		return result;
 
 	result = dram_cache_find_addr(
 			dev, "ucbbar,dram-cache-ext-tab", &cache->exttab_regs);
@@ -218,6 +264,15 @@ static int dram_cache_probe(struct platform_device *pdev)
 		dev_err(dev, "dram-cache: can't add memory cdev\n");
 		return result;
 	}
+
+	result = dram_cache_add_cdev(
+		&cache->ctrl_cdev, &dram_cache_ctrl_fops, devno + 2);
+	if (result < 0) {
+		dev_err(dev, "dram-cache: can't add ctrl cdev\n");
+		return result;
+	}
+
+	platform_set_drvdata(pdev, cache);
 
 	dev_info(dev, "DRAM Cache w/ major number %d\n", MAJOR(devno));
 
